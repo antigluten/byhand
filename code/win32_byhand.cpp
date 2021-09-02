@@ -18,6 +18,78 @@ global_variable void *bitmapMemory;
 global_variable int bitmapWidth;
 global_variable int bitmapHeight;
 
+// NOTE don't forget about these variables:
+global_variable int bytesPerPixel = 4;
+
+// NEW:
+internal void renderGradient(int xOffset, int yOffset) 
+{
+    int width = bitmapWidth;
+    int height = bitmapHeight;
+
+    int pitch = width * bytesPerPixel; 
+    uint8_t *row = (uint8_t *) bitmapMemory;
+    for (int y = 0; y < bitmapHeight; ++y)
+    {
+        // uint8_t *pixel = (uint8_t *) row;
+        // for (int x = 0; x < bitmapWidth; ++x)
+        // {
+        //     /*
+        //                                pixel +0 +1 +2 +3 
+        //     NOTE: pixel structure in memory: 00 00 00 00
+
+        //     */
+
+        //            *pixel = (uint8_t) x + xOffset;
+        //             ++pixel;
+
+        //             *pixel = (uint8_t) y + yOffset;
+        //             ++pixel;
+                
+        //             *pixel = 0;
+        //             ++pixel; 
+                
+        //             *pixel = 0;
+        //             ++pixel; 
+
+        // }
+        uint32_t *pixel = (uint32_t *) row;
+        for (int x = 0; x < bitmapWidth; ++x)
+        {
+            uint8_t blue = (x + xOffset);
+            uint8_t green = (y + yOffset);
+
+            /*
+            it represents memory in stack format (little-endian)
+                     blue     green    red      ?
+            32 bit - 00000000 00000000 00000000 00000000
+
+            green = 20 -> 00010010
+             blue = 40 -> 00100100
+
+            we are here ->00000000 00000000 00000000 00000000
+            
+            (green << 8) means we shift it to 8 bits on left
+            00000000 00000000 00000000 00000000 
+
+            before shifting
+            00010010 00000000 00000000 00000000 
+
+            after shifting to 8 bits
+            00000000 00010010 00000000 00000000 
+
+            | - bitwise operator (OR logic)
+            and the result is
+
+            00100100 00010010 00000000 00000000 
+            */
+
+            *pixel++ = ((green << 8) | blue); 
+        }
+
+        row += pitch;
+    }
+}
 
 internal void win32resizeDIBSelection(int width, int height)
 {
@@ -45,8 +117,6 @@ internal void win32resizeDIBSelection(int width, int height)
     bitmapInfo.bmiHeader.biCompression = BI_RGB;
     
     // NOTE we need memory, but the question is "how much memory do we need?"
-
-    int bytesPerPixel = 4;
     int bitmapMemorySize = (bitmapWidth * bitmapHeight) * bytesPerPixel;
 
     // NOTE DAY 004: VirtualAlloc function
@@ -55,60 +125,14 @@ internal void win32resizeDIBSelection(int width, int height)
 
     bitmapMemory = VirtualAlloc(0, bitmapMemorySize, MEM_COMMIT, PAGE_READWRITE);
 
-    int pitch = width * bytesPerPixel; 
-    uint8_t *row = (uint8_t *) bitmapMemory;
-    for (int y = 0; y < bitmapHeight; ++y)
-    {
-        uint8_t *pixel = (uint8_t *) row;
-        for (int x = 0; x < bitmapWidth; ++x)
-        {
-            /*
-                                       pixel +0 +1 +2 +3 
-            NOTE: pixel structure in memory: 00 00 00 00
-
-            */
-
-           int half = bitmapWidth / 2;
-
-           if (x < half)
-            {
-                *pixel = 0;
-                ++pixel;
-
-                *pixel = 0;
-                ++pixel;
-            
-                *pixel = 255;
-                ++pixel; 
-            
-                *pixel = 100;
-                ++pixel;
-            } 
-            else 
-            {
-                *pixel = 0;
-                ++pixel;
-
-                *pixel = 255;
-                ++pixel;
-            
-                *pixel = 0;
-                ++pixel; 
-            
-                *pixel = 100;
-                ++pixel;
-            }
-        }
-
-        row += pitch;
-
-    }
+    // renderGradient(0, 0);
+    // NOTE: need to clear it to black
 }
 
-internal void win32UpdateWindow(HDC hdc, RECT *windowRect, int x, int y, int width, int height)
+internal void win32UpdateWindow(HDC hdc, RECT *clientRect, int x, int y, int width, int height)
 {
-    int windowWidth = windowRect->right - windowRect->left;
-    int windowHeight = windowRect->bottom - windowRect->top;
+    int windowWidth = clientRect->right - clientRect->left;
+    int windowHeight = clientRect->bottom - clientRect->top;
 
     StretchDIBits(hdc, 0, 0, bitmapWidth, bitmapHeight, 0, 0, windowWidth, windowHeight, bitmapMemory, &bitmapInfo, DIB_RGB_COLORS, SRCCOPY);
 }
@@ -181,26 +205,53 @@ int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, PWSTR pCmdLine
     
     if (RegisterClass(&windowClass))
     {
-        HWND WindowHandle = CreateWindowEx(0, windowClass.lpszClassName, "Byhand Hero",
+        HWND window = CreateWindowEx(0, windowClass.lpszClassName, "Byhand Hero",
                 WS_OVERLAPPEDWINDOW | WS_VISIBLE,
                 CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT,
                 CW_USEDEFAULT, 0, 0, windowClass.hInstance, 0);
-        if (WindowHandle)
+        if (window)
         {
-            MSG msg;
             running = true;
+
+            int xOffset = 0;
+            int yOffset = 0;
             while(running)
             {
-                BOOL msgResult = GetMessageA(&msg, 0, 0, 0);
-                if (msgResult > 0)
+                MSG msg;
+                while (PeekMessage(&msg, 0, 0, 0, PM_REMOVE))
                 {
+                    if (msg.message == WM_QUIT)
+                    {
+                        running = false;
+                    }
+
                     TranslateMessage(&msg);
                     DispatchMessage(&msg);
                 }
-                else
-                {
-                    break;
-                }
+
+                renderGradient(xOffset, yOffset);
+
+                HDC deviceContext = GetDC(window);
+                RECT clientRect;
+                GetClientRect(window, &clientRect);
+                int windowWidth = clientRect.right - clientRect.left;
+                int windowHeight = clientRect.bottom - clientRect.top;
+                win32UpdateWindow(deviceContext, &clientRect, 0, 0, windowWidth, windowHeight);
+                ReleaseDC(window, deviceContext);
+
+                --xOffset;
+                --yOffset;
+
+                // BOOL msgResult = GetMessageA(&msg, 0, 0, 0);
+                // if (msgResult > 0)
+                // {
+                //     TranslateMessage(&msg);
+                //     DispatchMessage(&msg);
+                // }
+                // else
+                // {
+                //     break;
+                // }
             }
         }
         else
